@@ -5,6 +5,8 @@ use rocket::outcome::IntoOutcome;
 use rocket::request::{self, FlashMessage, FromRequest, Request};
 use rocket::response::{Redirect, Flash, status};
 use rocket::serde::Serialize;
+use rocket::State;
+
 
 use rocket_dyn_templates::Template;
 
@@ -37,23 +39,22 @@ impl<'r> FromRequest<'r> for User {
 
     async fn from_request(request: &'r Request<'_>) -> request::Outcome<User, Self::Error> {
         let user_id: Option<usize> = request.cookies()
-                        .get_private("user_id")
-                        .and_then(|cookie| cookie.value().parse().ok());
+                                        .get_private("user_id")
+                                        .and_then(|cookie| cookie.value().parse().ok());
 
-        println!("from_request: 0: user_id: {:?}", user_id);
         let user_id = match user_id {
             Some(x) => x,
             None => return request::Outcome::Forward(()),
         };
 
-        let outcome = request.rocket().state::<UserCtl>()
+        request.rocket().state::<UserCtl>()
             .map(|ctl| {
-                let x = ctl.lock().unwrap();
-                let user = x.get(user_id).unwrap();
+                let x = ctl.read().unwrap();
+                let user = x.auth.check_user_id(&user_id);
                 user
             })
-            .or_forward(());
-        outcome
+            .and_then(|x| x)
+            .or_forward(())
     }
 }
 
@@ -79,19 +80,31 @@ fn login(_user: User) -> Redirect {
 
 #[get("/login", rank = 2)]
 fn login_page(flash: Option<FlashMessage<'_>>) -> Template {
+    println!("login_page: flash: {:?}", flash);
+
     let mut x = HashMap::new();
-    x.insert("message", "invalid login");
-    x.insert("kind", "some kind");
-    Template::render("login", &x)
+    if let Some(f) = flash {
+        x.insert("kind", f.kind());
+        x.insert("message", f.message());
+        Template::render("login", &x)
+    } else {
+        x.insert("kind", "invalid kind");
+        x.insert("message", "invalid message");
+        Template::render("login", &x)
+    }
 }
 
 #[post("/login", data = "<login>")]
-fn post_login(jar: &CookieJar<'_>, login: Form<Login<'_>>) -> Result<Redirect, Flash<Redirect>> {
-    if login.username == "zbr" && login.password == "password" {
-        jar.add_private(Cookie::new("user_id", 1.to_string()));
-        Ok(Redirect::to(uri!(index)))
-    } else {
-        Err(Flash::error(Redirect::to(uri!(login_page)), "Invalid username/password."))
+fn post_login(jar: &CookieJar<'_>, login: Form<Login<'_>>, ctl: &State<UserCtl>) -> Result<Redirect, Flash<Redirect>> {
+    let x = ctl.read().unwrap();
+    match x.auth.check_password(login.username, login.password) {
+        Ok(user) => {
+            jar.add_private(Cookie::new("user_id", user.user_id.to_string()));
+            Ok(Redirect::to(uri!(index)))
+        },
+        Err(err_msg) => {
+            Err(Flash::error(Redirect::to(uri!(login_page)), err_msg))
+        },
     }
 }
 
@@ -117,14 +130,16 @@ fn default_catcher(status: Status, req: &Request<'_>) -> status::Custom<String> 
 #[rocket::main]
 async fn main() {
     let cfg = user::config::Config{
-        path: "qwe".to_owned(),
+        db_path: "qwe",
+        auth_path: "qwe",
     };
+
     rocket::build()
         .attach(Template::fairing())
         .register("/", catchers![default_catcher, not_found])
-        .mount("/static", FileServer::from("../static/"))
+        .mount("/static", FileServer::from("../static"))
         .mount("/", routes![index, no_auth_index, login, login_page, post_login, logout])
-        .manage(user::stage(cfg))
+        .manage(user::init(&cfg))
         .launch()
         .await
         .unwrap();

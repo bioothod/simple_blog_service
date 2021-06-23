@@ -5,7 +5,9 @@
     <h3>Here are your items:</h3>
     <ul>
         {% for s in items %}
-            <li>{{ s }}</li>
+            <li><h6>{{ s.timestamp }} {{ s.title }}</h6>
+		{{ s.content }}
+	    </li>
         {% endfor %}
     </ul>
 

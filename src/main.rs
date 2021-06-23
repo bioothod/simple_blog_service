@@ -7,10 +7,10 @@ use rocket::response::{Redirect, Flash, status};
 use rocket::serde::Serialize;
 use rocket::State;
 
-
 use rocket_dyn_templates::Template;
 
 use std::collections::HashMap;
+use structopt::StructOpt;
 
 #[macro_use] extern crate rocket;
 
@@ -23,7 +23,7 @@ struct TemplateContext<'r> {
     title: &'r str,
     name: Option<&'r str>,
     user_id: Option<usize>,
-    items: Vec<&'r str>
+    items: Vec<HashMap<String, String>>,
 }
 
 #[derive(FromForm)]
@@ -50,7 +50,7 @@ impl<'r> FromRequest<'r> for User {
         request.rocket().state::<UserCtl>()
             .map(|ctl| {
                 let x = ctl.read().unwrap();
-                let user = x.auth.check_user_id(&user_id);
+                let user = x.meta.check_user_id(&user_id);
                 user
             })
             .and_then(|x| x)
@@ -59,12 +59,24 @@ impl<'r> FromRequest<'r> for User {
 }
 
 #[get("/")]
-fn index(user: User) -> Template {
+fn index(user: User, ctl: &State<UserCtl>) -> Template {
+    let mut x = ctl.write().unwrap();
+    let posts = x.read_latest(0, 10);
+
+    let posts = match posts {
+        Err(err_msg) => {
+            println!("could not read posts: {}", err_msg);
+            vec![]
+        },
+        Ok(x) => x,
+    };
+    drop(x);
+
     Template::render("index", &TemplateContext {
-        title: "Hello",
+        title: "ioremap.net :: posts",
         name: Some(&user.username),
         user_id: Some(user.user_id),
-        items: vec!["One", "Two", "Three"],
+        items: posts,
     })
 }
 
@@ -97,7 +109,7 @@ fn login_page(flash: Option<FlashMessage<'_>>) -> Template {
 #[post("/login", data = "<login>")]
 fn post_login(jar: &CookieJar<'_>, login: Form<Login<'_>>, ctl: &State<UserCtl>) -> Result<Redirect, Flash<Redirect>> {
     let x = ctl.read().unwrap();
-    match x.auth.check_password(login.username, login.password) {
+    match x.meta.check_password(login.username, login.password) {
         Ok(user) => {
             jar.add_private(Cookie::new("user_id", user.user_id.to_string()));
             Ok(Redirect::to(uri!(index)))
@@ -109,7 +121,7 @@ fn post_login(jar: &CookieJar<'_>, login: Form<Login<'_>>, ctl: &State<UserCtl>)
 }
 
 #[post("/logout")]
-fn logout(jar: &CookieJar<'_>) -> Flash<Redirect> {
+fn logout(_user: User, jar: &CookieJar<'_>) -> Flash<Redirect> {
     jar.remove_private(Cookie::named("user_id"));
     Flash::success(Redirect::to(uri!(login_page)), "Successfully logged out.")
 }
@@ -127,11 +139,22 @@ fn default_catcher(status: Status, req: &Request<'_>) -> status::Custom<String> 
     status::Custom(status, msg)
 }
 
+#[derive(StructOpt)]
+struct Cli {
+    #[structopt(long="meta_path", parse(from_os_str))]
+    meta_path: std::path::PathBuf,
+
+    #[structopt(long="db_path", parse(from_os_str))]
+    db_path: std::path::PathBuf,
+}
+
 #[rocket::main]
 async fn main() {
+    let args = Cli::from_args();
+
     let cfg = user::config::Config{
-        db_path: "qwe",
-        auth_path: "qwe",
+        db_path: &args.db_path,
+        meta_path: &args.meta_path,
     };
 
     rocket::build()

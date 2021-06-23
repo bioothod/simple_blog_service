@@ -36,12 +36,12 @@ impl Clone for User {
 }
 
 
-pub struct AuthCtl {
+pub struct MetaCtl {
     username2id: HashMap<String, usize>,
     user_ids: HashMap<usize, Meta>,
 }
 
-impl AuthCtl {
+impl MetaCtl {
     pub fn check_password(&self, username: &str, password: &str) -> Result<User, &str> {
         let user_id = match self.username2id.get(username) {
             None => return Err("invalid username/password"),
@@ -67,8 +67,8 @@ impl AuthCtl {
     }
 }
 
-pub fn init(_auth_path: &str) -> AuthCtl {
-    let mut a = AuthCtl {
+pub fn init(_meta_path: &std::path::PathBuf) -> MetaCtl {
+    let mut a = MetaCtl {
         username2id: HashMap::new(),
         user_ids: HashMap::new(),
     };
